@@ -5,3 +5,5 @@ In configfile.json:
 	samples are the list of reads used
 	genomeDir is the directory of genome file used
 	genomeName is the name of the genome file used
+
+rule duplicate : ligne 83 et 84 il y a une erreur j'ai oublié de mettre les triples guillemets
