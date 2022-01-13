@@ -1,0 +1,18 @@
+{
+	"minlength": 10,
+	"qualtrim": 20,
+	"method": "spearman",
+	
+	"genomeType":"mm",
+	"genomeDir": "data/Mus_musculus_GRCm38.p6/Mus_musculus_2020-7-9/fasta",
+	"genomeName":"all",
+	"directory": "data/atacseq/subset",
+	"samples": [
+		"ss_50k_0h_R1",
+		"ss_50k_0h_R2",
+		"ss_50k_0h_R3",
+		"ss_50k_24h_R1",
+		"ss_50k_24h_R2",
+		"ss_50k_24h_R3"
+	]
+}

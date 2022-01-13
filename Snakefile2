@@ -1,0 +1,142 @@
+configfile: "configfile2.json"
+
+from itertools import combinations, permutations
+
+
+rule target:
+	input:
+		expand("results/comp/common_{combination}.txt", combination= ["_VS_".join(map(str, comb)) for comb in combinations(config["samples"], 2)]),
+		expand("results/comp/uniq_{permutation}.txt", permutation= ["_VS_".join(map(str, comb)) for comb in permutations(config["samples"], 2)])
+#expand("results/callPeak/{sample}_control_lambda.bdg",sample=config["samples"])
+		
+
+
+rule unzip: #snakemake gere la creation des fichiers manquant
+	input:
+		expand("{directory}/{{sample}}.fastq.gz", directory=config["directory"])
+	output:
+		temp("tmp/{sample}.fastq")
+	shell:
+		"""gunzip -c {input} > {output}"""
+		
+rule fastqc_init:
+	input:
+		"tmp/{sample}.fastq"
+	output:
+		"results/fastqc_init/{sample}_fastqc.html"
+	threads: 2
+	conda:
+		"env.yaml"
+	shell:
+		"""fastqc {input} -o results/fastqc_init """
+
+rule cutadapt:
+	input:
+		r1=expand("{directory}/{{sample}}_1.fastq.gz", directory=config["directory"]),
+		r2=expand("{directory}/{{sample}}_2.fastq.gz", directory=config["directory"])
+	params:
+		m=expand("{m}", m=config["minlength"]),
+		q=expand("{q}", q=config["qualtrim"])
+	output:
+		o1=temp("tmp/{sample}_filter1.fastq"),
+		o2=temp("tmp/{sample}_filter2.fastq")
+	shell:
+		"cutadapt -q {params.q} -m {params.m} -o {output.o1} -p {output.o2} {input.r1} {input.r2}"
+		
+
+rule buildIndex:
+	input:
+		genome=expand("{dir}/{name}.fasta", dir=config["genomeDir"], name=config["genomeName"])
+	output:
+		expand("{dir}/{name}.1.bt2", dir=config["genomeDir"], name=config["genomeName"])
+	threads: workflow.cores*0.9
+	shell:
+		"""bowtie-build --threads {threads} -f {input.genome} {output} """
+
+
+rule alignement:
+	input:
+		r1= "tmp/{sample}_filter1.fastq",
+		r2= "tmp/{sample}_filter2.fastq",
+		index= expand("{dir}/{name}.1.bt2", dir=config["genomeDir"], name=config["genomeName"])
+	output:
+		sam=temp("tmp/{sample}.sam")
+	threads: 4
+	params: ind=expand("{dir}/{ind}", ind=config["genomeName"], dir=config["genomeDir"])
+	shell:
+		"bowtie2 -q --threads {threads} -x {params.ind} -1 {input.r1} -2 {input.r2} -S {output.sam}"
+
+rule trimming:
+	input:
+		"tmp/{sample}.sam"
+	output:
+		bam=temp("tmp/{sample}.bam"),
+		sorted=temp("tmp/{sample}_sorted.bam")
+	shell:
+		"""samtools view -Sb {input} > {output.bam};
+		   samtools sort {output.bam} > {output.sorted};
+		   samtools index {output.sorted}"""
+
+rule duplicate:
+	input:
+		"tmp/{sample}_sorted.bam"
+	output:
+		bam="results/{sample}_duplicate.bam",
+		txt="results/{sample}_duplicate.txt"
+	shell:
+		"""picard-tools MarkDuplicates I={input} O={output.bam} M={output.txt};
+		samtools index {output.bam}"""
+
+rule multibam:
+	input:
+		[
+			expand("results/{samp}_duplicate.bam", samp=sample)
+			for sample in config["samples"]
+		]
+	output:
+		"results/multibam.npz"
+	shell:
+		"multiBamSummary bins --bamfiles {input} -o {output}"
+
+
+rule correlation:
+	input:
+		"results/multibam.npz"
+	output:
+		"results/heatmap.png",
+		"results/scatterplot.png"
+	params:
+		c=expand("{c}", c=config["method"])
+	shell:
+		"""plotCorrelation -in {input} -c {params.c} -p heatmap -o results/heatmap.png;
+		plotCorrelation -in {input} -c {params.c} -p scatterplot -o results/scatterplot.png"""
+
+rule peakCall:
+	input:
+		"results/heatmap.png",
+		"results/scatterplot.png",
+		bam="results/{sample}_duplicate.bam"
+	output:
+		multiext("results/callPeak/{sample}", "_control_lambda.bdg", "_model.r", "_peaks.narrowPeak", "_peaks.xls", "_summits.bed", "_treat_pileup.bdg")
+	params: type = expand("{type}",type=config["genomeType"])
+	shell:
+		"macs3 callpeak -f BAM  -t {input.bam} -g {params.type} -n {wildcards.sample} -B -q 0.01 --outdir results/callPeak"
+		
+
+rule peakCommon:
+	input:
+		p1="results/callPeak/{sample1}_summits.bed",
+		p2="results/callPeak/{sample2}_summits.bed"
+	output:
+		"results/comp/common_{sample1}_VS_{sample2}.txt"
+	shell:
+		"bedtools intersect -a {input.p1} -b {input.p2} > {output}"
+
+rule peakUniq:
+	input:
+		p1="results/callPeak/{sample1}_summits.bed",
+		p2="results/callPeak/{sample2}_summits.bed"
+	output:
+		"results/comp/uniq_{sample1}_VS_{sample2}.txt"
+	shell:
+		"bedtools intersect -v -a {input.p1} -b {input.p2} > {output}"
